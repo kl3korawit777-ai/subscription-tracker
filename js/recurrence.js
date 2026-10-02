@@ -1,4 +1,5 @@
-// กฎรายการซ้ำ: { cycle: 'weekly'|'monthly'|'yearly', interval: number, startDate: 'YYYY-MM-DD' }
+// กฎรายการซ้ำ: { cycle: 'weekly'|'monthly'|'yearly'|'once', interval: number, startDate: 'YYYY-MM-DD' }
+// once = ครั้งเดียว: มีวันจ่ายเดียวคือ startDate (ไม่ซ้ำ ไม่มีกติกาวันสิ้นเดือน)
 // วันที่ทั้งหมดเป็น string 'YYYY-MM-DD' (local, ไม่ผูก timezone)
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -20,6 +21,7 @@ const fromDays = (n) => {
 // วันจ่ายลำดับที่ k (k=0 คือวันเริ่ม) คำนวณจากวันเริ่มเสมอ ไม่ไล่ต่อจากผลก่อนหน้า
 export function occurrenceAt(rule, k) {
   const { cycle, startDate } = rule;
+  if (cycle === 'once') return k === 0 ? startDate : null;
   const interval = rule.interval ?? 1;
   const { y, m, d } = parse(startDate);
   if (cycle === 'weekly') return fromDays(toDays(startDate) + 7 * interval * k);
@@ -39,6 +41,7 @@ export function occurrenceAt(rule, k) {
 
 // วันจ่ายทั้งหมดในช่วง [from, to] (รวมปลายทั้งสองด้าน)
 export function occurrencesInRange(rule, from, to) {
+  if (rule.cycle === 'once') return rule.startDate >= from && rule.startDate <= to ? [rule.startDate] : [];
   const out = [];
   for (let k = 0; ; k++) {
     const dt = occurrenceAt(rule, k);
@@ -50,6 +53,7 @@ export function occurrencesInRange(rule, from, to) {
 
 // วันจ่ายแรกที่อยู่หลัง afterDate (ไม่รวม afterDate)
 export function nextOccurrence(rule, afterDate) {
+  if (rule.cycle === 'once') return rule.startDate > afterDate ? rule.startDate : null;
   for (let k = 0; ; k++) {
     const dt = occurrenceAt(rule, k);
     if (dt > afterDate) return dt;

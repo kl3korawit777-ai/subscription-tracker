@@ -177,3 +177,61 @@ describe('trialAlerts', () => {
     expect(trialAlerts(items, '2025-02-10')).toEqual([]);
   });
 });
+
+describe('once (ครั้งเดียว)', async () => {
+  const rec = await import('../js/recurrence.js');
+  const once = (startDate, o = {}) => ({ cycle: 'once', startDate, ...o });
+
+  it('occurrenceAt: ครั้งแรก = วันที่กำหนด ไม่มีครั้งถัดไป', () => {
+    expect(rec.occurrenceAt(once('2025-03-15'), 0)).toBe('2025-03-15');
+    expect(rec.occurrenceAt(once('2025-03-15'), 1)).toBeNull();
+  });
+
+  it('occurrencesInRange: มีเฉพาะเมื่อวันนั้นอยู่ในช่วง (รวมปลายทั้งสองด้าน) และไม่วนไม่รู้จบ', () => {
+    const r = once('2025-03-15');
+    expect(rec.occurrencesInRange(r, '2025-03-01', '2025-03-31')).toEqual(['2025-03-15']);
+    expect(rec.occurrencesInRange(r, '2025-03-15', '2025-03-15')).toEqual(['2025-03-15']);
+    expect(rec.occurrencesInRange(r, '2025-03-16', '2025-12-31')).toEqual([]);
+    expect(rec.occurrencesInRange(r, '2024-01-01', '2025-03-14')).toEqual([]);
+    expect(rec.occurrencesInRange(r, '2020-01-01', '2030-12-31')).toEqual(['2025-03-15']);
+  });
+
+  it('วันที่ 31 ไม่ถูกเลื่อน (ไม่ใช่รอบ จึงไม่มีกติกาวันสิ้นเดือน)', () => {
+    expect(rec.occurrencesInRange(once('2025-01-31'), '2025-01-01', '2025-12-31')).toEqual(['2025-01-31']);
+  });
+
+  it('nextOccurrence: ก่อนวันนั้น = วันนั้น ; วันนั้นหรือหลังจากนั้น = null', () => {
+    const r = once('2025-03-15');
+    expect(rec.nextOccurrence(r, '2025-03-14')).toBe('2025-03-15');
+    expect(rec.nextOccurrence(r, '2025-03-15')).toBeNull();
+    expect(rec.nextOccurrence(r, '2026-01-01')).toBeNull();
+  });
+
+  it('ระดับรายการ: อยู่ในปฏิทินเดือนนั้นเดือนเดียว, ยกเลิกแล้วไม่มี, trial กรองตามวันหมด trial', () => {
+    expect(rec.paymentsInMonth(once('2025-03-15'), 2025, 3)).toEqual(['2025-03-15']);
+    expect(rec.paymentsInMonth(once('2025-03-15'), 2025, 4)).toEqual([]);
+    expect(rec.paymentsInMonth(once('2025-03-15'), 2026, 3)).toEqual([]);
+    expect(rec.paymentsInRange(once('2025-03-15', { status: 'cancelled' }), '2025-01-01', '2025-12-31')).toEqual([]);
+    expect(rec.paymentsInRange(once('2025-03-15', { trialEnd: '2025-03-20' }), '2025-01-01', '2025-12-31')).toEqual([]);
+  });
+
+  it('upcomingPayments / monthSchedule เห็นรายการครั้งเดียว', () => {
+    const it1 = { id: 'a', name: 'ค่าสมัครสอบ', status: 'active', ...once('2025-03-15') };
+    expect(rec.upcomingPayments([it1], '2025-03-10').map((e) => [e.date, e.daysLeft])).toEqual([['2025-03-15', 5]]);
+    expect(rec.upcomingPayments([it1], '2025-03-16')).toEqual([]);
+    expect(rec.monthSchedule([it1], 2025, 3).map((e) => e.date)).toEqual(['2025-03-15']);
+  });
+
+  it('รอบเดิมไม่เปลี่ยน และรอบที่ไม่รู้จักยัง throw', () => {
+    expect(rec.occurrenceAt({ cycle: 'monthly', startDate: '2025-01-31' }, 1)).toBe('2025-02-28');
+    expect(() => rec.occurrenceAt({ cycle: 'daily', startDate: '2025-01-01' }, 0)).toThrow(/unknown cycle/);
+  });
+});
+
+describe('annualCost: ครั้งเดียว', async () => {
+  const { annualCost } = await import('../js/dashboard.js');
+  it('นับเป็นยอดเต็มครั้งเดียว ไม่ใช่ NaN', () => {
+    expect(annualCost({ cycle: 'once', price: 1500 })).toBe(1500);
+    expect(annualCost({ cycle: 'monthly', price: 100 })).toBe(1200);
+  });
+});

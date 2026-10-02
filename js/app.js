@@ -10,6 +10,10 @@ import { dashboardHTML, toThb, monthTotalThb, RATE_DEFAULTS } from './dashboard.
 import { resolvePeriod } from './analytics.js';
 import { dayWord } from './summaryText.js';
 import { trashHTML, splitTrash, addToTrash } from './trash.js';
+import { mergeCategories, normalizeItem, categoryName, DEFAULT_CATEGORY_ID } from './categories.js';
+import { itemBadge, categoryMeta, iconBadgeHTML, normalizeIcon, LUCIDE, LUCIDE_KEYS, EMOJI_CHOICES } from './icons.js';
+import { fileToIconDataUrl } from './iconImage.js';
+import { guessCategory, applyGuess, chooseCategory, initialSource, suggestCategories } from './categoryGuess.js';
 import {
   balance, parseAmount, fmtSatang, rankCategories, filterTransactions, groupByDay, sortTransactions,
   paymentToTransaction,
@@ -21,16 +25,17 @@ import {
 } from './storage.js';
 
 const CURRENCIES = ['THB', 'USD', 'EUR', 'JPY'];
-const CYCLES = { weekly: 'รายสัปดาห์', monthly: 'รายเดือน', yearly: 'รายปี' };
+const CYCLES = { weekly: 'รายสัปดาห์', monthly: 'รายเดือน', yearly: 'รายปี', once: 'ครั้งเดียว' };
+// รอบจ่ายที่แสดงในแถว: "รายเดือน" เป็นรอบปกติจึงไม่แสดง (แสดงเฉพาะรอบที่ต่างออกไป)
+const cycleText = (i) => (i.cycle === 'monthly' ? '' : CYCLES[i.cycle]);
+const catDot = (i) => `<span class="cdot" style="--c:${categoryMeta(i).color}" aria-hidden="true"></span>`;
 const STATUSES = { active: 'ใช้งานอยู่', trial: 'ทดลองใช้', paused: 'พักไว้', cancelled: 'ยกเลิกแล้ว' };
 const POPULAR = [
-  { name: 'Netflix', category: 'บันเทิง' },
-  { name: 'Spotify', category: 'บันเทิง' },
-  { name: 'YouTube Premium', category: 'บันเทิง' },
-  { name: 'iCloud', category: 'Cloud' },
+  { name: 'Netflix', categoryId: 'entertainment', icon: { type: 'lucide', value: 'film' } },
+  { name: 'Spotify', categoryId: 'entertainment', icon: { type: 'lucide', value: 'music' } },
+  { name: 'YouTube Premium', categoryId: 'entertainment', icon: { type: 'lucide', value: 'play' } },
+  { name: 'iCloud', categoryId: 'cloud', icon: { type: 'lucide', value: 'cloud' } },
 ];
-// หมวดเดิม (เวอร์ชันก่อนหน้า) → หมวดใหม่
-const CATEGORY_MIGRATION = { 'ดนตรี': 'บันเทิง', 'ทำงาน/เครื่องมือ': 'AI', 'คลาวด์': 'Cloud', 'สุขภาพ': 'อื่น ๆ', 'การศึกษา': 'การเรียน' };
 
 const SAMPLES = [
   { name: 'Netflix', category: 'บันเทิง', price: 419, currency: 'THB', cycle: 'monthly', startDate: '2025-01-31', trialEnd: '', payment: 'บัตรลงท้าย 1234', status: 'active', note: 'แพ็กเกจ Premium' },
@@ -46,6 +51,7 @@ const state = {
   filter: '', sortKey: 'name', sheet: null, stamped: null,
   fb: { status: 'off', user: null, loginError: '', busy: false, error: '' }, skipLogin: false, loading: false, localCounts: null, sync: null, syncRaw: { pending: false, fromCache: true, error: null },
   trash: { subscriptions: [], transactions: [] },
+  categories: mergeCategories(), skippedSuggest: new Set(), // รายการหมวด (เก็บใน settings) / id ที่กด "ถามทีหลัง" ในรอบนี้
   transactions: [], lq: '', ftype: '', fcat: '', ffrom: '', fto: '', ledgerLimit: 50,
 };
 
@@ -53,7 +59,8 @@ const state = {
 const pad = (n) => String(n).padStart(2, '0');
 const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 const asDate = (s) => new Date(`${s}T00:00:00`);
-const fmtDay = (s) => asDate(s).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' });
+// ช่องว่างไม่ตัดบรรทัด (NBSP) ระหว่างวันกับเดือน กัน "15" กับ "ก.ค." แยกคนละบรรทัด
+const fmtDay = (s) => asDate(s).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }).replace(' ', ' ');
 const money = (i) => (i.currency === 'THB' ? `${i.price.toLocaleString('th-TH')} บาท` : fmtPrice(i.price, i.currency));
 const payKey = (i, date) => `${i.id}|${date}`;
 const nextPayment = (i) => paymentsInRange(i, todayStr(), addDays(todayStr(), 400))[0] ?? null;
@@ -84,16 +91,20 @@ async function loadData() {
     await setMeta('seeded', true);
   }
   // อ่านครั้งเดียวรวมรายการในถังขยะ แล้วแยกในเครื่อง (ไม่อ่านซ้ำจากคลาวด์)
+  state.categories = mergeCategories(await getMeta('categories'));
   const subs = splitTrash(await getAllSubscriptions({ includeDeleted: true }));
-  state.items = subs.live;
-  state.trash.subscriptions = subs.deleted;
-  if (!(await getMeta('categories-v2'))) {
-    for (const i of state.items) {
-      const next = CATEGORY_MIGRATION[i.category] ?? (CATEGORIES.includes(i.category) ? i.category : 'อื่น ๆ');
-      if (next !== i.category) { i.category = next; await saveSubscription(i); }
+  // ย้ายข้อมูลเดิมครั้งเดียว: เติม categoryId (ชื่อหมวดรุ่นเก่า → id) โดยไม่เปลี่ยนหมวดที่ผู้ใช้ตั้งไว้ และไม่ตั้ง categorySource
+  // (การ์ด "แนะนำหมวดใหม่" จะถามเฉพาะรายการที่ยังเป็น "อื่น ๆ") ; รวมรายการในถังขยะด้วย เพื่อให้กู้คืนแล้วหมวดไม่หาย
+  if (!(await getMeta('categories-v3'))) {
+    for (const i of [...subs.live, ...subs.deleted]) {
+      const n = normalizeItem(i, state.categories);
+      if (n.categoryId !== i.categoryId || n.category !== i.category) await saveSubscription(n);
     }
-    await setMeta('categories-v2', true);
+    await setMeta('categories', state.categories.map(({ id, name, color }) => ({ id, name, color })));
+    await setMeta('categories-v3', true);
   }
+  state.items = subs.live.map((i) => normalizeItem(i, state.categories));
+  state.trash.subscriptions = subs.deleted.map((i) => normalizeItem(i, state.categories));
   state.payments = await getAllPayments();
   const txs = splitTrash(await getAllTransactions({ includeDeleted: true }));
   state.transactions = txs.live;
@@ -132,7 +143,24 @@ function nextUpHTML() {
 function calendarView() {
   if (!state.items.length) return emptyHTML();
   const total = monthTotalThb(monthSchedule(state.items, state.year, state.month), state.rates);
-  return trialBandHTML() + nextUpHTML() + calendarHTML({ ...state, totalThb: total });
+  return trialBandHTML() + nextUpHTML() + suggestCardHTML() + calendarHTML({ ...state, totalThb: total });
+}
+
+// การ์ด "แนะนำหมวดใหม่": ยืนยันทีละรายการ (ข้อมูลเดิมที่ยัง "อื่น ๆ" แต่ชื่อเดาหมวดได้)
+function suggestCardHTML() {
+  const list = suggestCategories(state.items, state.skippedSuggest);
+  if (!list.length) return '';
+  const { item, categoryId } = list[0];
+  const to = categoryName(state.categories, categoryId);
+  return `<section class="suggest" aria-labelledby="sg-title">
+    <h3 id="sg-title">แนะนำหมวดใหม่ <small>1 จาก ${list.length}</small></h3>
+    <p class="suggest-line"><strong>${esc(item.name)}</strong> น่าจะอยู่หมวด ${categoryBadge(to, 'sm')}<strong>${esc(to)}</strong> <span class="sub">(ตอนนี้: ${esc(item.category)})</span></p>
+    <div class="suggest-actions">
+      <button type="button" class="btn primary" data-sugg-accept="${esc(item.id)}">ใช้หมวดนี้</button>
+      <button type="button" class="btn" data-sugg-keep="${esc(item.id)}">คงเป็น ${esc(item.category)}</button>
+      <button type="button" class="btn" data-sugg-later="${esc(item.id)}">ถามทีหลัง</button>
+    </div>
+  </section>`;
 }
 
 function listView() {
@@ -148,9 +176,9 @@ function listView() {
   const row = (i) => {
     const next = nextPayment(i);
     return `<li><button class="row" data-edit="${i.id}">
-      ${categoryBadge(i.category)}
+      ${itemBadge(i)}
       <span class="grow"><strong>${esc(i.name)}</strong>
-        <span class="sub">${esc(i.category)} · ${CYCLES[i.cycle]} · ${next ? `ตัดถัดไป ${fmtDay(next)}` : STATUSES[i.status]}</span></span>
+        <span class="sub">${catDot(i)}${[esc(i.category), cycleText(i), next ? `ตัดถัดไป ${fmtDay(next)}` : i.cycle === 'once' ? 'ผ่านแล้ว' : STATUSES[i.status]].filter(Boolean).join(' · ')}</span></span>
       <span class="right"><span class="money">${esc(fmtPrice(i.price, i.currency))}</span>${i.status === 'trial' || i.status === 'paused' ? `<span class="chip">${STATUSES[i.status]}</span>` : ''}</span>
     </button></li>`;
   };
@@ -158,7 +186,7 @@ function listView() {
   const cancelled = sorted.filter((i) => i.status === 'cancelled');
   const group = (title, list) => (list.length ? `<h3>${title} <small>${list.length}</small></h3><ul class="rows">${list.map(row).join('')}</ul>` : '');
   return `<div class="page-head"><h2>รายการสมัครบริการ</h2><button class="btn primary" data-add>เพิ่มบริการ</button></div>
-    ${trialBandHTML()}
+    ${trialBandHTML()}${suggestCardHTML()}
     <div class="controls">
       <label>เรียงตาม<select id="sort" data-sort>
         <option value="name" ${key === 'name' ? 'selected' : ''}>ชื่อ</option>
@@ -249,8 +277,8 @@ function dayHTML(date) {
     const key = payKey(i, date);
     const p = state.payments.find((x) => x.id === key);
     return `<article class="entry">
-      <div class="entry-top">${categoryBadge(i.category)}
-        <div class="grow"><strong>${esc(i.name)}</strong><div class="sub">${esc(i.category)} · ${CYCLES[i.cycle]} · ${STATUSES[i.status]}</div></div>
+      <div class="entry-top">${itemBadge(i)}
+        <div class="grow"><strong>${esc(i.name)}</strong><div class="sub">${catDot(i)}${[esc(i.category), cycleText(i), STATUSES[i.status]].filter(Boolean).join(' · ')}</div></div>
         <span class="money price">${esc(fmtPrice(i.price, i.currency))}</span></div>
       <div class="sub">ช่องทางจ่าย: ${esc(i.payment || '—')}</div>
       ${i.note ? `<div class="sub">โน้ต: ${esc(i.note)}</div>` : ''}
@@ -275,24 +303,39 @@ const optionsHTML = (list, sel) => (Array.isArray(list) ? list.map((v) => [v, v]
 function formHTML(item) {
   const editing = !!item.id;
   const cycle = item.cycle ?? 'monthly';
-  const moreOpen = editing && (item.trialEnd || item.payment || item.note || item.status !== 'active' || item.category !== 'อื่น ๆ');
+  const moreOpen = editing && (item.trialEnd || item.payment || item.note || item.status !== 'active');
+  const catId = item.categoryId ?? DEFAULT_CATEGORY_ID;
+  const catSource = initialSource(item);
+  const stored = item.icon && normalizeIcon(item.icon, item.name).type === item.icon.type ? normalizeIcon(item.icon, item.name) : null; // เก็บเฉพาะไอคอนที่ผู้ใช้เลือก (ค่าเริ่มต้นตามชื่อ ไม่เก็บ)
+  const catMeta = state.categories.find((c) => c.id === catId) ?? state.categories.at(-1);
   return `<h2 id="sheet-title">${editing ? 'แก้ไขรายการ' : 'เพิ่มรายการ'}</h2>
     ${editing ? '' : `<div class="quick" role="group" aria-label="บริการยอดนิยม"><span class="sub">บริการยอดนิยม</span>
-      ${POPULAR.map((p) => `<button type="button" class="chip-btn" data-chip="${p.name}">${categoryBadge(p.category, 'sm')}${p.name}</button>`).join('')}</div>`}
-    <form id="form" novalidate>
+      ${POPULAR.map((p) => `<button type="button" class="chip-btn" data-chip="${p.name}">${categoryBadge(categoryName(state.categories, p.categoryId), 'sm')}${p.name}</button>`).join('')}</div>`}
+    <form id="form" novalidate data-cat-source="${catSource}" data-icon-source="${stored ? 'user' : 'default'}">
       <div class="field"><label for="f-name">ชื่อ</label>
-        <input id="f-name" name="name" autocomplete="off" value="${esc(item.name ?? '')}" aria-describedby="e-name"><p class="err" id="e-name"></p></div>
+        <div class="name-row">
+          <button type="button" class="icon-pick" id="icon-btn" data-icon-open aria-label="เลือกไอคอน" aria-expanded="false" aria-controls="icon-picker">${iconBadgeHTML(normalizeIcon(stored, item.name ?? ''), catMeta)}</button>
+          <input id="f-name" name="name" autocomplete="off" value="${esc(item.name ?? '')}" aria-describedby="e-name">
+        </div>
+        <input type="hidden" name="icon" value="${stored ? esc(JSON.stringify(stored)) : ''}">
+        <p class="err" id="e-name"></p>
+        <div id="icon-picker" class="icon-picker" hidden></div></div>
+      <fieldset class="chips cat-field"><legend>หมวด</legend>
+        <div class="chip-row cat-scroll" role="radiogroup" aria-label="หมวด">
+          ${state.categories.map((c) => `<label class="chip-opt"><input type="radio" name="categoryId" value="${esc(c.id)}" ${c.id === catId ? 'checked' : ''}><span>${categoryBadge(c.name, 'sm')}${esc(c.name)}</span></label>`).join('')}
+        </div>
+        <p class="hint" id="h-cat" aria-live="polite">${catSource === 'guess' ? 'เดาจากชื่อ เปลี่ยนได้' : ''}</p>
+      </fieldset>
       <div class="field"><label for="f-price">ราคา</label>
         <div class="inline"><input id="f-price" name="price" inputmode="decimal" autocomplete="off" placeholder="เช่น 149" value="${item.price ?? ''}" aria-describedby="e-price">
         <select name="currency" aria-label="สกุลเงิน">${optionsHTML(CURRENCIES, item.currency ?? 'THB')}</select></div><p class="err" id="e-price"></p></div>
-      <fieldset class="seg"><legend>รอบการจ่าย</legend>
+      <fieldset class="seg four"><legend>รอบการจ่าย</legend>
         ${Object.entries(CYCLES).map(([v, l]) => `<label><input type="radio" name="cycle" value="${v}" ${v === cycle ? 'checked' : ''}><span>${l}</span></label>`).join('')}
       </fieldset>
       <div class="field"><label for="f-date">วันตัดเงิน</label>
         <input id="f-date" name="startDate" type="date" value="${item.startDate ?? todayStr()}" aria-describedby="h-date e-date">
         <p class="hint" id="h-date">วันที่ตัดเงินครั้งไหนก็ได้ ระบบนับรอบถัดไปให้เอง</p><p class="err" id="e-date"></p></div>
       <details class="more" ${moreOpen ? 'open' : ''}><summary>รายละเอียดเพิ่มเติม</summary>
-        <div class="field"><label for="f-cat">หมวด</label><select id="f-cat" name="category">${optionsHTML(CATEGORIES, item.category ?? 'อื่น ๆ')}</select></div>
         <div class="field"><label for="f-trial">วันหมด Free trial</label><input id="f-trial" name="trialEnd" type="date" value="${item.trialEnd ?? ''}" aria-describedby="e-trial"><p class="err" id="e-trial"></p></div>
         <div class="field"><label for="f-pay">ช่องทางจ่าย</label><input id="f-pay" name="payment" autocomplete="off" placeholder="เช่น บัตรลงท้าย 1234" value="${esc(item.payment ?? '')}" aria-describedby="e-pay"><p class="err" id="e-pay"></p></div>
         <div class="field"><label for="f-status">สถานะ</label><select id="f-status" name="status">${optionsHTML(STATUSES, item.status ?? 'active')}</select></div>
@@ -338,6 +381,66 @@ function showErrors(form, errs) {
   first?.focus();
 }
 
+// ---- หมวดในฟอร์ม: อ่าน/ตั้งค่าสถานะ { categoryId, source } (source อยู่ที่ data-cat-source ของฟอร์ม) ----
+const catState = (form) => ({ categoryId: form.querySelector('input[name=categoryId]:checked')?.value ?? DEFAULT_CATEGORY_ID, source: form.dataset.catSource });
+function setCatState(form, { categoryId, source }) {
+  const radio = [...form.querySelectorAll('input[name=categoryId]')].find((r) => r.value === categoryId);
+  if (radio) radio.checked = true; // ตั้งด้วยโค้ดไม่ยิง change จึงไม่นับเป็นผู้ใช้เลือกเอง
+  form.dataset.catSource = source;
+  form.querySelector('#h-cat').textContent = source === 'guess' ? 'เดาจากชื่อ เปลี่ยนได้' : '';
+  revealChip(radio?.closest('label'));
+  refreshIconBtn(form);
+}
+
+// ---- ไอคอน: ค่าอยู่ใน hidden input name="icon" (JSON หรือว่าง = ตัวอักษรแรกของชื่อ) ----
+const iconOf = (form) => { try { return JSON.parse(form.elements.icon.value); } catch { return null; } };
+function refreshIconBtn(form) {
+  const cat = state.categories.find((c) => c.id === catState(form).categoryId) ?? state.categories.at(-1);
+  form.querySelector('#icon-btn').innerHTML = iconBadgeHTML(normalizeIcon(iconOf(form), form.querySelector('#f-name').value), cat);
+}
+function setIcon(form, icon, source) {
+  form.elements.icon.value = icon ? JSON.stringify(icon) : '';
+  form.dataset.iconSource = source;
+  refreshIconBtn(form);
+}
+
+const ICON_TABS = { letter: 'ตัวอักษร', lucide: 'ไอคอน', emoji: 'อีโมจิ', image: 'รูป' };
+function renderIconPicker(form, tab) {
+  const body = {
+    letter: '<p class="hint">ใช้ตัวอักษรแรกของชื่อบนสีของหมวด (ตามชื่อที่แก้ได้เสมอ)</p><button type="button" class="btn" data-icon-pick="letter">ใช้ตัวอักษรแรก</button>',
+    lucide: `<div class="icon-grid">${LUCIDE_KEYS.map((k) => `<button type="button" class="icon-opt" data-icon-pick="lucide:${k}" aria-label="${k}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${LUCIDE[k]}</svg></button>`).join('')}</div>`,
+    emoji: `<div class="icon-grid">${EMOJI_CHOICES.map((e) => `<button type="button" class="icon-opt" data-icon-pick="emoji:${e}" aria-label="${e}">${e}</button>`).join('')}</div>`,
+    image: `<label class="btn" for="icon-file">เลือกรูป</label><input id="icon-file" type="file" accept="image/*" class="sr-only">
+      <p class="hint">ย่อเป็น 96×96 WebP และต้องไม่เกิน 15 KB รูปอยู่ในเครื่อง/บัญชีของคุณเท่านั้น</p><p class="err" id="e-icon" role="alert"></p>`,
+  }[tab];
+  form.querySelector('#icon-picker').innerHTML = `<div class="icon-tabs" role="group" aria-label="ชนิดไอคอน">${Object.entries(ICON_TABS).map(([k, l]) => `<button type="button" class="chip-btn" data-icon-tab="${k}" aria-pressed="${k === tab}">${l}</button>`).join('')}</div>${body}`;
+}
+
+// เลื่อนแถบชิปเฉพาะแนวนอน ให้ชิปที่ระบบเลือกให้ (จากการเดา) โผล่ครบในแถบ ไม่เลื่อนทั้งหน้า
+function revealChip(label) {
+  const box = label?.closest('.cat-scroll');
+  if (!box) return;
+  const l = label.getBoundingClientRect();
+  const b = box.getBoundingClientRect();
+  // เลื่อนให้ชิปชิดขอบซ้ายของแถบ (ตรงจุด snap ของ scroll-snap จึงไม่เด้งกลับ)
+  if (l.right > b.right || l.left < b.left) box.scrollBy({ left: l.left - b.left, behavior: 'instant' });
+}
+
+// การ์ดแนะนำหมวด: ยืนยันทีละรายการ ทุกปุ่มเลิกทำได้ (ยกเว้น "ถามทีหลัง" ซึ่งไม่ได้แก้ข้อมูล)
+async function answerSuggestion(id, accept) {
+  const before = state.items.find((i) => i.id === id);
+  if (!before) return;
+  const targetId = accept ? guessCategory(before.name) ?? before.categoryId : before.categoryId;
+  const after = { ...before, categoryId: targetId, category: categoryName(state.categories, targetId), categorySource: 'user' };
+  const put = async (item) => {
+    await saveSubscription(item);
+    state.items = state.items.map((i) => (i.id === item.id ? item : i));
+    render('.suggest .btn.primary');
+  };
+  await put(after);
+  toast(accept ? `ย้าย ${before.name} ไปหมวด ${after.category} แล้ว` : `จะไม่ถามเรื่องหมวดของ ${before.name} อีก`, () => put(before));
+}
+
 document.addEventListener('submit', async (e) => {
   if (e.target.id !== 'form') return;
   e.preventDefault();
@@ -345,7 +448,12 @@ document.addEventListener('submit', async (e) => {
   showErrors(e.target, errs);
   if (Object.keys(errs).length) return;
   const base = state.sheet.item;
-  const saved = { ...base, ...d, price, id: base.id ?? newId() };
+  // categoryId คือค่าจริง ; category (ชื่อ) เก็บซ้ำเป็นสำเนาไว้ให้รุ่นเก่า/ไฟล์สำรองอ่านได้ ตอนแสดงผลจะหาชื่อใหม่จาก id เสมอ
+  const saved = { ...base, ...d, price, id: base.id ?? newId(), category: categoryName(state.categories, d.categoryId), categorySource: e.target.dataset.catSource };
+  // icon: เก็บเฉพาะที่ผู้ใช้เลือก (ว่าง = ตัวอักษรแรกของชื่อ ซึ่งตามชื่อเสมอ) ; ค่าผิดรูปถูกทิ้ง
+  const pickedIcon = (() => { try { return JSON.parse(d.icon); } catch { return null; } })();
+  const okIcon = pickedIcon && normalizeIcon(pickedIcon, '');
+  saved.icon = okIcon && okIcon.type === pickedIcon.type ? okIcon : undefined;
   await saveSubscription(saved);
   state.items = [...state.items.filter((i) => i.id !== saved.id), saved];
   state.sheet = null;
@@ -370,7 +478,7 @@ async function markPaid(key) {
   if (!item) return;
   // บันทึกยอดจริง + snapshot ชื่อ/หมวด/อัตราแลกเปลี่ยน ณ ตอนจ่าย เพื่อให้ประวัติคงเดิมแม้แก้/ลบรายการภายหลัง
   const payment = {
-    id: key, subId, date, name: item.name, category: item.category,
+    id: key, subId, date, name: item.name, category: item.category, categoryId: item.categoryId,
     amount: item.price, currency: item.currency,
     amountThb: toThb(item.price, item.currency, state.rates),
     paidAt: new Date().toISOString(),
@@ -491,6 +599,26 @@ document.addEventListener('click', async (e) => {
     return openSheet({ type: 'day', date: d.openDay }, el);
   }
   if (d.nav) return changeMonth(d.nav, `[data-nav="${d.nav}"]`);
+  if ('iconOpen' in d) {
+    const form = $('#form');
+    const picker = form.querySelector('#icon-picker');
+    picker.hidden = !picker.hidden;
+    el.setAttribute('aria-expanded', String(!picker.hidden));
+    if (!picker.hidden) renderIconPicker(form, iconOf(form)?.type ?? 'letter');
+    return;
+  }
+  if (d.iconTab) return renderIconPicker($('#form'), d.iconTab);
+  if (d.iconPick) {
+    const form = $('#form');
+    const [type, ...rest] = d.iconPick.split(':');
+    setIcon(form, type === 'letter' ? null : { type, value: rest.join(':') }, type === 'letter' ? 'default' : 'user');
+    form.querySelector('#icon-picker').hidden = true;
+    form.querySelector('#icon-btn').setAttribute('aria-expanded', 'false');
+    return form.querySelector('#icon-btn').focus();
+  }
+  if (d.suggAccept) return answerSuggestion(d.suggAccept, true);
+  if (d.suggKeep) return answerSuggestion(d.suggKeep, false);
+  if (d.suggLater) { state.skippedSuggest.add(d.suggLater); return render('.suggest .btn.primary'); }
   if (d.pay) return markPaid(d.pay);
   if (d.unpay) return unpay(d.unpay);
   if (d.edit) return openSheet({ type: 'form', item: state.items.find((i) => i.id === d.edit) }, el);
@@ -498,7 +626,10 @@ document.addEventListener('click', async (e) => {
     const p = POPULAR.find((x) => x.name === d.chip);
     const form = $('#form');
     form.name.value = p.name;
-    form.category.value = p.category;
+    const cur = catState(form);
+    if (cur.source !== 'user') setCatState(form, { categoryId: p.categoryId, source: 'guess' }); // ผู้ใช้เลือกหมวดเองแล้ว → ไม่ทับ
+    if (form.dataset.iconSource !== 'user') setIcon(form, p.icon, 'chip'); // ไอคอนที่ผู้ใช้เลือกเองก็ไม่ทับเช่นกัน
+    else refreshIconBtn(form);
     form.querySelector('#e-name').textContent = '';
     form.name.removeAttribute('aria-invalid');
     return form.price.focus(); // ราคาให้กรอกเอง เพราะแต่ละแพ็กเกจไม่เท่ากัน
@@ -509,6 +640,30 @@ document.addEventListener('click', async (e) => {
 
 document.addEventListener('change', async (e) => {
   const t = e.target;
+  if (t.id === 'icon-file') { // อัปโหลดรูป → ย่อ 96×96 WebP ≤ 15 KB
+    const form = t.form;
+    const err = form.querySelector('#e-icon');
+    const file = t.files[0];
+    if (!file) return;
+    err.textContent = 'กำลังย่อรูป…';
+    try {
+      setIcon(form, { type: 'image', value: await fileToIconDataUrl(file) }, 'user');
+      form.querySelector('#icon-picker').hidden = true;
+      form.querySelector('#icon-btn').setAttribute('aria-expanded', 'false');
+      form.querySelector('#icon-btn').focus();
+    } catch (er) {
+      err.textContent = { 'too-big': 'รูปนี้ย่อแล้วยังใหญ่เกิน 15 KB ลองรูปที่เรียบกว่านี้', 'no-webp': 'เบราว์เซอร์นี้แปลงเป็น WebP ไม่ได้' }[er.message] ?? 'เปิดรูปนี้ไม่ได้ ลองไฟล์ภาพอื่น';
+    }
+    t.value = '';
+    return;
+  }
+  if (t.name === 'categoryId' && t.form?.id === 'form') { // ผู้ใช้เลือกหมวดเอง → หยุดเดาจากชื่อ
+    const next = chooseCategory(catState(t.form), t.value);
+    t.form.dataset.catSource = next.source;
+    t.form.querySelector('#h-cat').textContent = '';
+    refreshIconBtn(t.form); // สีวงกลมตามหมวด
+    return;
+  }
   if (t.name === 'type' && t.form?.id === 'qform') {
     const cur = t.form.querySelector('input[name=category]:checked')?.value;
     $('#q-chips').innerHTML = chipsHTML(t.value, cur);
@@ -749,6 +904,13 @@ function updateLedger() {
 }
 
 document.addEventListener('input', (e) => {
+  if (e.target.id === 'f-name' && e.target.form?.id === 'form') { // พิมพ์ชื่อ → เดาหมวด (หยุดเมื่อผู้ใช้เลือกเอง)
+    const cur = catState(e.target.form);
+    const next = applyGuess(cur, e.target.value);
+    if (next !== cur) setCatState(e.target.form, next);
+    refreshIconBtn(e.target.form); // ตัวอักษรแรกตามชื่อที่พิมพ์
+    return;
+  }
   if (e.target.id !== 'lq') return;
   state.lq = e.target.value;
   state.ledgerLimit = 50;
@@ -863,7 +1025,7 @@ async function runMigrationUI() {
 // สำรองข้อมูลปัจจุบัน (จากที่เก็บที่ใช้อยู่) เป็นไฟล์ JSON
 async function backupNow() {
   const meta = {};
-  for (const k of ['rates', 'seeded', 'categories-v2']) { const v = await getMeta(k); if (v !== undefined) meta[k] = v; }
+  for (const k of ['rates', 'seeded', 'categories', 'categories-v2', 'categories-v3']) { const v = await getMeta(k); if (v !== undefined) meta[k] = v; }
   const local = {
     subscriptions: await getAllSubscriptions({ includeDeleted: true }), payments: await getAllPayments(),
     transactions: await getAllTransactions({ includeDeleted: true }), activityLog: await getActivityLog(), meta,

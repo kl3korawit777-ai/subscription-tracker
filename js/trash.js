@@ -17,7 +17,7 @@ export function addToTrash(list, item, deletedAt) {
 }
 
 const when = (iso) => new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
-const CYCLES = { weekly: 'รายสัปดาห์', monthly: 'รายเดือน', yearly: 'รายปี' };
+const CYCLES = { weekly: 'รายสัปดาห์', monthly: 'รายเดือน', yearly: 'รายปี', once: 'ครั้งเดียว' };
 
 const row = (kind, id, title, sub, right, deletedAt) => `<li class="trash-row">
   <div class="grow"><strong>${title}</strong>

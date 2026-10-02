@@ -11,7 +11,7 @@ export const RATE_DEFAULTS = { THB: 1, USD: 35, EUR: 38, JPY: 0.24 };
 
 export const toThb = (amount, currency, rates) => amount * (rates[currency] ?? (currency === 'THB' ? 1 : NaN));
 
-const PER_YEAR = { weekly: 52, monthly: 12, yearly: 1 };
+const PER_YEAR = { weekly: 52, monthly: 12, yearly: 1, once: 1 }; // once = ยอดเต็มครั้งเดียว
 const isActive = (i) => i.status === 'active' || i.status === 'trial';
 
 // ค่าใช้จ่ายต่อปีโดยเฉลี่ย (สกุลเงินของรายการ)

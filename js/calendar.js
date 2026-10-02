@@ -1,15 +1,12 @@
 import { monthSchedule } from './recurrence.js';
+import { DEFAULT_CATEGORIES, DEFAULT_CATEGORY_ID } from './categories.js';
+import { itemBadge } from './icons.js';
 
-// หมวด: สี + ไอคอน (ไม่ใช้สีอย่างเดียวในการบอกหมวด) glyph = สีของไอคอนบนวงกลมสี
-export const CATEGORY_META = {
-  'บันเทิง': { color: '#D99A1E', glyph: '#2B1D00', icon: '<path d="M9 7l8 5-8 5z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/>' },
-  'การเรียน': { color: '#2F855A', glyph: '#fff', icon: '<path d="M4 6.5C6.5 5.5 9.5 5.5 12 7c2.5-1.5 5.5-1.5 8-.5V18c-2.5-1-5.5-1-8 .5-2.5-1.5-5.5-1.5-8-.5z"/><path d="M12 7v11.5"/>' },
-  'AI': { color: '#6D4BC9', glyph: '#fff', icon: '<path d="M12 4l1.8 5.2L19 11l-5.2 1.8L12 18l-1.8-5.2L5 11l5.2-1.8z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/>' },
-  'Cloud': { color: '#2B7CB3', glyph: '#fff', icon: '<path d="M7.5 18.5h9a4 4 0 0 0 .6-7.96 5.5 5.5 0 0 0-10.5 1.2A3.5 3.5 0 0 0 7.5 18.5z"/>' },
-  'อื่น ๆ': { color: '#8A8F98', glyph: '#fff', icon: '<circle cx="6.5" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="17.5" cy="12" r="1.6" fill="currentColor"/>' },
-};
+// หมวด: สี + ไอคอน (ไม่ใช้สีอย่างเดียวในการบอกหมวด) ข้อมูลอยู่ที่ categories.js (อ้างอิงด้วย id) ที่นี่จัดเป็นตารางหาจากชื่อสำหรับวาดป้าย
+export const CATEGORY_META = Object.fromEntries(DEFAULT_CATEGORIES.map((c) => [c.name, { id: c.id, color: c.color, glyph: c.glyph, icon: c.icon }]));
 export const CATEGORIES = Object.keys(CATEGORY_META);
-const metaOf = (c) => CATEGORY_META[c] ?? CATEGORY_META['อื่น ๆ'];
+const OTHER_NAME = DEFAULT_CATEGORIES.find((c) => c.id === DEFAULT_CATEGORY_ID).name;
+const metaOf = (c) => CATEGORY_META[c] ?? CATEGORY_META[OTHER_NAME];
 export const CATEGORY_COLORS = Object.fromEntries(CATEGORIES.map((c) => [c, CATEGORY_META[c].color]));
 
 export const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -59,7 +56,7 @@ export function calendarHTML({ items, year, month, selected, paid = {}, totalThb
   for (let d = 1; d <= days; d++) {
     const date = ymd(year, month, d);
     const list = byDate[date] ?? [];
-    const marks = list.slice(0, 3).map((i) => `<span class="mark">${paid[`${i.id}|${date}`] ? '<span class="tick" aria-hidden="true">✓</span>' : categoryBadge(i.category, 'sm')}<span class="mk-name" aria-hidden="true">${esc(i.name)}</span></span>`).join('');
+    const marks = list.slice(0, 3).map((i) => `<span class="mark">${paid[`${i.id}|${date}`] ? '<span class="tick" aria-hidden="true">✓</span>' : itemBadge(i, 'sm')}<span class="mk-name" aria-hidden="true">${esc(i.name)}</span></span>`).join('');
     const more = list.length > 3 ? `<span class="more">+${list.length - 3}</span>` : '';
     const label = `${d} ${title}${list.length ? ` มี ${list.map((i) => `${i.name}${paid[`${i.id}|${date}`] ? ' จ่ายแล้ว' : ''}`).join(', ')}` : ''}`;
     cells.push(`<button class="day${date === today ? ' today' : ''}${date === selected ? ' sel' : ''}" data-day="${date}" aria-label="${esc(label)}"${date === today ? ' aria-current="date"' : ''}>

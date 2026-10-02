@@ -1,9 +1,9 @@
 // Service worker: ให้แอปเปิดใช้งานออฟไลน์ได้ — แก้ไฟล์แอปแล้วให้เพิ่มเลข CACHE_VERSION
-const CACHE_VERSION = 'v14';
+const CACHE_VERSION = 'v17';
 const CACHE = `subs-${CACHE_VERSION}`;
 const SHELL = [
   './', 'css/style.css', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png', 'fonts/Anuphan.ttf',
-  'js/app.js', 'js/storage.js', 'js/recurrence.js', 'js/calendar.js', 'js/dashboard.js', 'js/ics.js', 'js/ledger.js', 'js/firebase.js', 'js/firebase-config.js', 'js/syncstate.js', 'js/settings.js', 'js/storage.idb.js', 'js/storage.firestore.js', 'js/migrate.js', 'js/analytics.js', 'js/summaryText.js', 'js/charts.js', 'js/trash.js',
+  'js/app.js', 'js/storage.js', 'js/recurrence.js', 'js/calendar.js', 'js/dashboard.js', 'js/ics.js', 'js/ledger.js', 'js/firebase.js', 'js/firebase-config.js', 'js/syncstate.js', 'js/settings.js', 'js/storage.idb.js', 'js/storage.firestore.js', 'js/migrate.js', 'js/analytics.js', 'js/summaryText.js', 'js/charts.js', 'js/trash.js', 'js/categories.js', 'js/categoryGuess.js', 'js/icons.js', 'js/iconImage.js',
 ];
 
 self.addEventListener('install', (e) => {

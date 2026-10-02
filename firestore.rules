@@ -27,18 +27,27 @@ service cloud.firestore {
     // เอกสารปัจจุบันอยู่ในถังขยะ (ลบถาวรได้เฉพาะของที่ลบแบบ soft delete มาก่อน)
     function inTrash() { return resource.data.get('deletedAt', null) != null; }
 
+    // icon: ไม่มี / null / { type, value } ; รูปเป็น data URL WebP ไม่เกิน 15 KB (base64 ≈ 20.5k ตัวอักษร)
+    function validIcon(d) {
+      return !('icon' in d) || d.icon == null
+        || (d.icon is map && d.icon.type in ['letter', 'lucide', 'emoji', 'image'] && d.icon.value is string && d.icon.value.size() <= 21000);
+    }
+
     function validSubscription(d, id) {
       return d.id == id
         && d.keys().hasAll(['id', 'name', 'category', 'currency', 'cycle', 'startDate', 'status'])
         && isText(d.name, 100) && d.name.size() > 0
         && isText(d.category, 50)
         && d.currency in ['THB', 'USD', 'EUR', 'JPY']
-        && d.cycle in ['weekly', 'monthly', 'yearly']
+        && d.cycle in ['weekly', 'monthly', 'yearly', 'once']
         && d.status in ['active', 'trial', 'paused', 'cancelled']
         && isDate(d.startDate)
         && validDeletedAt(d)
         && (!('trialEnd' in d) || d.trialEnd == null || d.trialEnd == '' || isDate(d.trialEnd))
         && (('price' in d && isMoneyNumber(d.price)) || ('priceMinor' in d && d.priceMinor is int && d.priceMinor >= 0))
+        && (!('categoryId' in d) || isText(d.categoryId, 50))
+        && (!('categorySource' in d) || d.categorySource in ['default', 'guess', 'user'])
+        && validIcon(d)
         && safeText(d, 'payment', 100)
         && safeText(d, 'note', 500);
     }
