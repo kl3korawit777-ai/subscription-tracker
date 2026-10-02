@@ -1,0 +1,12 @@
+{
+  "name": "subscription-tracker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
+    "vitest": "^2.1.0"
+  }
+}

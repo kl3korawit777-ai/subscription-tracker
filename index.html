@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Subscription Tracker</title>
+  <meta name="theme-color" content="#F6F7F9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#141821" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preload" href="fonts/Anuphan.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">Subscription Tracker</span>
+    <span id="sync" class="sync" role="status" hidden></span>
+    <button class="gear" data-view="settings" aria-label="ตั้งค่า">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/></svg>
+    </button>
+  </header>
+  <main id="app" class="page"></main>
+
+  <nav id="nav" class="bottom" aria-label="เมนูหลัก">
+    <div class="side-brand" aria-hidden="true">Subscription Tracker</div>
+    <div class="bottom-in">
+      <button data-view="calendar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2.5"/><path d="M4 10h16M9 3.5v4M15 3.5v4"/></svg>ปฏิทิน
+      </button>
+      <button data-view="list">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7h11M9 12h11M9 17h11"/><circle cx="4.8" cy="7" r="1" /><circle cx="4.8" cy="12" r="1"/><circle cx="4.8" cy="17" r="1"/></svg>รายการ
+      </button>
+      <button class="add" data-quick aria-label="บันทึกรายการ" aria-keyshortcuts="N">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="lbl" aria-hidden="true">บันทึกรายการ</span><kbd aria-hidden="true">N</kbd>
+      </button>
+      <button data-view="ledger">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5h11a1.5 1.5 0 0 1 1.5 1.5v13H7.5A1.5 1.5 0 0 1 6 17.5z"/><path d="M9.5 9h6M9.5 13h6"/></svg>บัญชี
+      </button>
+      <button data-view="summary">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 12h14M4 17h7"/></svg>สรุป
+      </button>
+      <button class="side-only" data-view="settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/></svg>ตั้งค่า
+      </button>
+    </div>
+  </nav>
+
+  <div id="sheet" hidden></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

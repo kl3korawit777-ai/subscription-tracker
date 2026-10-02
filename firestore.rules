@@ -1,0 +1,118 @@
+rules_version = '2';
+
+// กฎมาตรฐาน: เจ้าของข้อมูลเท่านั้นที่อ่าน/เขียนได้ที่ users/{uid}/** ปฏิเสธทุกอย่างที่เหลือ
+// - ตรวจชนิดข้อมูล (วันที่ = "YYYY-MM-DD", จำนวนเงินของบัญชี = int สตางค์, id ตรงกับ document id)
+// - ห้ามเก็บเลขบัตรเต็ม: ช่องข้อความอิสระที่มีตัวเลข 13 หลักขึ้นไปจะถูกปฏิเสธ (เป็นด่านสำรองต่อจากที่แอปตรวจแล้ว)
+// - activityLog เพิ่มได้อย่างเดียว แก้/ลบไม่ได้
+// - ลบ = soft delete (เขียน deletedAt) ; ลบเอกสารจริงได้เฉพาะของที่อยู่ในถังขยะแล้ว (ยกเว้น payments และ transactions แบบ pay:<id> ของ "ยกเลิกตรา")
+// TODO (ตามแผนย้ายข้อมูล): เมื่อเปลี่ยนเงินทุกจุดเป็นหน่วยย่อย (priceMinor / amountMinor) ให้เลิกรับ price / amount แบบทศนิยม
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    function isDate(v) { return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
+    function isText(v, max) { return v is string && v.size() <= max; }
+    function isMoneyNumber(v) { return (v is int || v is float) && v >= 0; }
+
+    // ช่องข้อความอิสระ (ไม่บังคับ): ยาวไม่เกิน max และไม่มีเลขบัตร (13 หลักขึ้นไป คั่นด้วยช่องว่าง/ขีดได้)
+    function safeText(d, f, max) {
+      return !(f in d) || (isText(d[f], max) && !d[f].matches('.*([0-9][ -]?){13,}.*'));
+    }
+
+    // deletedAt: ไม่มี / null (ปกติ) / ข้อความเวลา (อยู่ในถังขยะ)
+    function validDeletedAt(d) { return !('deletedAt' in d) || d.deletedAt == null || d.deletedAt is string; }
+
+    // เอกสารปัจจุบันอยู่ในถังขยะ (ลบถาวรได้เฉพาะของที่ลบแบบ soft delete มาก่อน)
+    function inTrash() { return resource.data.get('deletedAt', null) != null; }
+
+    function validSubscription(d, id) {
+      return d.id == id
+        && d.keys().hasAll(['id', 'name', 'category', 'currency', 'cycle', 'startDate', 'status'])
+        && isText(d.name, 100) && d.name.size() > 0
+        && isText(d.category, 50)
+        && d.currency in ['THB', 'USD', 'EUR', 'JPY']
+        && d.cycle in ['weekly', 'monthly', 'yearly']
+        && d.status in ['active', 'trial', 'paused', 'cancelled']
+        && isDate(d.startDate)
+        && validDeletedAt(d)
+        && (!('trialEnd' in d) || d.trialEnd == null || d.trialEnd == '' || isDate(d.trialEnd))
+        && (('price' in d && isMoneyNumber(d.price)) || ('priceMinor' in d && d.priceMinor is int && d.priceMinor >= 0))
+        && safeText(d, 'payment', 100)
+        && safeText(d, 'note', 500);
+    }
+
+    function validPayment(d, id) {
+      return d.id == id
+        && d.keys().hasAll(['id', 'subId', 'date', 'amount', 'currency'])
+        && isDate(d.date)
+        && isMoneyNumber(d.amount)
+        && d.currency in ['THB', 'USD', 'EUR', 'JPY']
+        && (!('amountThb' in d) || isMoneyNumber(d.amountThb))
+        && (!('amountMinor' in d) || (d.amountMinor is int && d.amountMinor >= 0))
+        && safeText(d, 'name', 200);
+    }
+
+    // บัญชีรายรับ/รายจ่าย: จำนวนเงินเป็น int สตางค์เท่านั้น
+    function validTransaction(d, id) {
+      return d.id == id
+        && d.keys().hasAll(['id', 'type', 'category', 'amount', 'currency', 'date'])
+        && d.type in ['income', 'expense']
+        && d.amount is int && d.amount >= 0
+        && d.currency == 'THB'
+        && isDate(d.date)
+        && isText(d.category, 50)
+        && validDeletedAt(d)
+        && (!('dueDate' in d) || isDate(d.dueDate))
+        && safeText(d, 'name', 200)
+        && safeText(d, 'note', 500);
+    }
+
+    function validLogEntry(d) {
+      return d.keys().hasAll(['at', 'action', 'entity', 'entityId'])
+        && isText(d.action, 50) && isText(d.entity, 50) && isText(d.entityId, 200);
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create, update: if isOwner(uid) && request.resource.data.keys().hasOnly(['lastLoginAt', 'updatedAt']);
+      allow delete: if false;
+
+      match /subscriptions/{id} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validSubscription(request.resource.data, id);
+        allow delete: if isOwner(uid) && inTrash();
+      }
+
+      match /payments/{id} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validPayment(request.resource.data, id);
+        allow delete: if isOwner(uid);
+      }
+
+      match /transactions/{id} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validTransaction(request.resource.data, id);
+        // pay:<id> = รายการที่เกิดจาก "จ่ายแล้ว" ลบจริงตอน "ยกเลิกตรา" ; รายการที่ผู้ใช้บันทึกเองต้องผ่านถังขยะก่อน
+        allow delete: if isOwner(uid) && (id.matches('^pay:.*') || inTrash());
+      }
+
+      // บันทึกกิจกรรม: เพิ่มได้อย่างเดียว
+      match /activityLog/{id} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid) && validLogEntry(request.resource.data);
+        allow update, delete: if false;
+      }
+
+      // ตั้งค่า (เช่น อัตราแลกเปลี่ยน)
+      match /meta/{key} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
