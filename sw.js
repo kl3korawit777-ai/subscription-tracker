@@ -1,5 +1,5 @@
 // Service worker: ให้แอปเปิดใช้งานออฟไลน์ได้ — แก้ไฟล์แอปแล้วให้เพิ่มเลข CACHE_VERSION
-const CACHE_VERSION = 'v13';
+const CACHE_VERSION = 'v14';
 const CACHE = `subs-${CACHE_VERSION}`;
 const SHELL = [
   './', 'css/style.css', 'manifest.json', 'icons/icon-192.png', 'icons/icon-512.png', 'fonts/Anuphan.ttf',
